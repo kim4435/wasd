@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>바운스 볼 - 이지 모드</title>
+    <title>바운스 볼 - 10스테이지 에디션</title>
     <style>
         :root {
             --bg-color: #1a1a2e;
@@ -66,23 +66,34 @@
             z-index: 100;
             border: 2px solid var(--block-color);
             box-shadow: 0 0 20px rgba(78, 204, 163, 0.3);
+            min-width: 250px;
         }
 
+        .btn-next { background: var(--block-color); color: #1a1a2e; }
+        .btn-retry { background: var(--spike-color); color: white; }
+
         button {
-            background: var(--block-color);
             border: none;
             padding: 12px 30px;
-            color: #1a1a2e;
             font-weight: bold;
             border-radius: 5px;
             cursor: pointer;
             margin-top: 15px;
             font-size: 1.1rem;
-            transition: transform 0.2s;
+            transition: transform 0.2s, opacity 0.2s;
+            display: block;
+            width: 100%;
         }
 
         button:hover {
             transform: scale(1.05);
+            opacity: 0.9;
+        }
+
+        #star-count {
+            font-size: 0.9rem;
+            color: var(--star-color);
+            margin-top: 4px;
         }
     </style>
 </head>
@@ -90,327 +101,319 @@
 
 <div id="ui-overlay">
     <h1 id="stage-display" style="margin: 0; font-size: 1.8rem; letter-spacing: 2px;">STAGE 1</h1>
-    <p id="sub-display" style="margin: 8px 0; opacity: 0.8; font-size: 1rem;">전체적인 난이도가 하향되었습니다!</p>
+    <p id="sub-display" style="margin: 8px 0; opacity: 0.8; font-size: 1rem;">로딩 중...</p>
+    <div id="star-count">남은 별: 0</div>
 </div>
 
 <div id="game-container">
     <canvas id="gameCanvas" width="800" height="500"></canvas>
     <div id="message-box">
-        <h2 id="msg-title" style="color: var(--star-color); margin-top: 0;">STAGE CLEAR!</h2>
-        <p>다음 단계로 도전하시겠습니까?</p>
-        <button onclick="closeMessage()">NEXT STAGE</button>
+        <h2 id="msg-title" style="margin-top: 0;">MESSAGE</h2>
+        <p id="msg-content">내용</p>
+        <button id="msg-button" onclick="handleMessageClick()">버튼</button>
     </div>
 </div>
 
 <script>
-    const canvas = document.getElementById('gameCanvas');
-    const ctx = canvas.getContext('2d');
-    const stageDisplay = document.getElementById('stage-display');
-    const subDisplay = document.getElementById('sub-display');
-    const messageBox = document.getElementById('message-box');
+    window.onload = function() {
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const stageDisplay = document.getElementById('stage-display');
+        const subDisplay = document.getElementById('sub-display');
+        const starDisplay = document.getElementById('star-count');
+        const messageBox = document.getElementById('message-box');
+        const msgTitle = document.getElementById('msg-title');
+        const msgContent = document.getElementById('msg-content');
+        const msgButton = document.getElementById('msg-button');
 
-    // Physics & Config
-    const GRAVITY = 0.26; // 중력 살짝 감소 (체공 시간 증가)
-    const JUMP_FORCE = -7.0; // 점프력 조절
-    const MOVE_SPEED = 4.0; // 이동 속도 살짝 증가 (답답함 해소)
-    const BALL_RADIUS = 12; // 공 크기 살짝 키움 (충돌 판정 유리)
-    const GRID = 40;
+        const GRAVITY = 0.26;
+        const JUMP_FORCE = -7.0;
+        const MOVE_SPEED = 4.0;
+        const BALL_RADIUS = 12;
+        const GRID = 40;
 
-    let currentStage = 0;
-    let isGameOver = false;
-    let ball = { x: 0, y: 0, vx: 0, vy: 0, hasItem: false, canDouble: false };
-    let camera = { x: 0, y: 0 };
-    let blocks = [], spikes = [], items = [], star = { x: 0, y: 0 };
-    let particles = [], ghosts = [];
-    let keys = {};
+        let currentStage = 0;
+        let gameState = 'playing'; 
+        let ball = { x: 0, y: 0, vx: 0, vy: 0, jumpCount: 0 };
+        let camera = { x: 0, y: 0 };
+        let blocks = [], spikes = [], stars = [];
+        let particles = [], ghosts = [];
+        let keys = {};
+        let lowestBlockY = 0;
 
-    // 맵 데이터 (범례: 1 블록, 2 가시, 3 시작, 4 별, 5 날개)
-    // 맵의 간격을 좁히고 블록을 더 많이 배치하여 난이도를 낮춤
-    const stages = [
-        [ // 1단계: 연습용
-            "                                        ",
-            "                                        ",
-            "      3                                 ",
-            "   11111     11111                      ",
-            "11111111111111111111111111  11111  4    ",
-            "11111111111111111111111111  111111111111"
-        ],
-        [ // 2단계: 가시 피하기 (가시 개수 감소)
-            "                                        ",
-            "                                        ",
-            "   3      1111                          ",
-            "  1111   1111111   1111                 ",
-            "111111221111111221111111    111   1114  ",
-            "111111111111111111111111    111111111111"
-        ],
-        [ // 3단계: 날개 아이템 (아이템 위치를 낮춤)
-            "                                        ",
-            "               11111                    ",
-            "   3   5      1111111                   ",
-            "  111111     111111111         1111     ",
-            "111111112211111111111111    11111111  4 ",
-            "111111111111111111111111    111111111111"
-        ],
-        [ // 4단계: 낙하 방지턱 추가
-            "                                      4 ",
-            "                                   1111 ",
-            "                   1111         1111111 ",
-            "                1111111      11111      ",
-            "   3   5    111111        11111         ",
-            "  111111    111111                      ",
-            "1111111122211111111111111111111111111111"
-        ],
-        [ // 5단계: 간격 좁히기
-            "                                        ",
-            "                                     4  ",
-            "                                  1111  ",
-            "                           1111111      ",
-            "              11    111111              ",
-            "        111111                          ",
-            "   3 5  111111                          ",
-            "  1111                                  ",
-            "1111112211111111111111111111111111111111"
-        ],
-        [ // 6단계: 올라가기 (발판 넓힘)
-            " 4                                      ",
-            " 111                                    ",
-            "    111                                 ",
-            "       111     111                      ",
-            "  3 5      111         111              ",
-            " 1111                      111          ",
-            "1111122111111111111111111111111111111111"
-        ],
-        [ // 7단계: 마지막 (도약 발판 추가)
-            "                                        ",
-            "                                      4 ",
-            "                                 111111 ",
-            "                            11111       ",
-            "                       11111            ",
-            "  3  5     1111   11111                 ",
-            " 111111                                 ",
-            "1111111122111111111111111111111111111111"
-        ]
-    ];
+        const stages = [
+            [ "                                        ", "      3                                 ", "   11111     11111                      ", "11111111111111111111111111  11111  4    ", "11111111111111111111111111  111111111111" ],
+            [ "   3      1111                          ", "  1111   1111111   1111                 ", "111111221111111221111111    111   1114  ", "111111111111111111111111    111111111111" ],
+            [ "                                     4  ", "                                   111  ", "                       1111             ", "          1111                          ", "    3                                   ", "  11111             22222               ", "1111111111111111111111111111111111111111" ],
+            [ "            11                          ", "         11      11        4            ", "      11            11    11            ", "   11                  11               ", " 3                                      ", "1111122211112221111222111122211112221111" ],
+            [ "                                  4     ", "                          1111   1111   ", "                1111                    ", "       1111                             ", "   3                                    ", " 1111                                   ", "1111122222222222222222222222222222211111" ],
+            // 6단계부터 별 2개
+            [ "    4                                 4 ", "   111                               11 ", "                       111              ", "             111                        ", "   3      111                           ", "  111                                   ", "1111122222222222222222222222222222211111" ],
+            [ " 4                                      ", " 11                                     ", "     11        4                        ", "          11  11                        ", "   3                                    ", "  11                                    ", "1111122222111112222211111222221111122222" ],
+            [ "                                   4    ", "                        111       111   ", "             111                        ", "      111                               ", " 4                                      ", " 11                                     ", "1111122222222222222222222222222222211111" ],
+            [ " 4          4                           ", " 11        11        11        11       ", "      11        11        11        11  ", "   3                                    ", "  11                                    ", "1111122222222222222222222222222222222221" ],
+            [ "                                      4 ", "                                    111 ", "                           4            ", "                         111            ", "                111                     ", "       111                              ", "   3                                    ", "  111                                   ", "1111122222222222222222222222222222222222" ]
+        ];
 
-    const hints = [
-        "블록이 넓어져서 점프가 쉬워졌어요!",
-        "가시가 줄어들었습니다. 편하게 이동하세요.",
-        "날개 아이템으로 여유롭게 도약하세요.",
-        "카메라가 가는 방향을 천천히 따라가세요.",
-        "발판이 많아졌으니 안심하고 이동하세요.",
-        "한 칸씩 계단 오르듯이 올라가면 됩니다.",
-        "마지막입니다! 넓은 발판을 믿고 뛰어보세요."
-    ];
+        const hints = [
+            "기본 점프를 익히세요.",
+            "가시를 피해 점프하세요.",
+            "3단계! 이제 공중에서 한 번 더 뛸 수 있습니다!",
+            "넓은 가시밭은 2단 점프로 가볍게 넘으세요.",
+            "높은 곳도 2단 점프라면 문제없어요.",
+            "6단계! 이제 별을 2개 모두 모아야 합니다.",
+            "별의 위치를 잘 파악하고 이동하세요.",
+            "침착하게 2단 점프를 활용하세요.",
+            "가시 위를 아슬아슬하게 지나가야 합니다.",
+            "마지막 단계! 모든 별을 모아 탈출하세요!"
+        ];
 
-    function createEffect(x, y, color) {
-        for (let i = 0; i < 8; i++) {
-            particles.push({
-                x, y,
-                vx: (Math.random() - 0.5) * 4,
-                vy: (Math.random() - 0.5) * 4,
-                life: 1.0,
-                color: color
-            });
-        }
-    }
-
-    function initStage(idx) {
-        if (idx >= stages.length) {
-            alert("모든 스테이지 클리어! 대단하시네요!");
-            currentStage = 0;
-            idx = 0;
+        function createEffect(x, y, color) {
+            for (let i = 0; i < 8; i++) {
+                particles.push({
+                    x, y,
+                    vx: (Math.random() - 0.5) * 4,
+                    vy: (Math.random() - 0.5) * 4,
+                    life: 1.0,
+                    color: color
+                });
+            }
         }
 
-        const map = stages[idx];
-        blocks = []; spikes = []; items = [];
-        particles = []; ghosts = [];
-        isGameOver = false;
-        
-        stageDisplay.innerText = `STAGE ${idx + 1}`;
-        subDisplay.innerText = hints[idx];
+        function initStage(idx) {
+            if (idx >= stages.length) {
+                alert("축하합니다! 10스테이지를 모두 정복하셨습니다!");
+                currentStage = 0;
+                idx = 0;
+            }
 
-        map.forEach((row, r) => {
-            for (let c = 0; c < row.length; c++) {
-                let x = c * GRID, y = r * GRID + 100;
-                if (row[c] === '1') blocks.push({ x, y, w: GRID, h: GRID });
-                if (row[c] === '2') spikes.push({ x, y, w: GRID, h: GRID });
-                if (row[c] === '3') {
-                    ball.x = x + GRID / 2; ball.y = y;
-                    ball.vx = 0; ball.vy = 0;
-                    ball.hasItem = false; ball.canDouble = false;
-                    camera.x = ball.x - canvas.width / 2;
-                    camera.y = ball.y - canvas.height / 2;
+            const map = stages[idx];
+            blocks = []; spikes = []; stars = [];
+            particles = []; ghosts = [];
+            gameState = 'playing';
+            lowestBlockY = 0;
+            
+            stageDisplay.innerText = `STAGE ${idx + 1}`;
+            subDisplay.innerText = hints[idx];
+
+            map.forEach((row, r) => {
+                for (let c = 0; c < row.length; c++) {
+                    let x = c * GRID, y = r * GRID + 150;
+                    if (row[c] === '1') {
+                        blocks.push({ x, y, w: GRID, h: GRID });
+                        if (y > lowestBlockY) lowestBlockY = y;
+                    }
+                    if (row[c] === '2') {
+                        spikes.push({ x, y, w: GRID, h: GRID });
+                        if (y > lowestBlockY) lowestBlockY = y;
+                    }
+                    if (row[c] === '3') {
+                        ball.x = x + GRID / 2; ball.y = y;
+                        ball.vx = 0; ball.vy = 0;
+                        ball.jumpCount = 0;
+                        camera.x = ball.x - canvas.width / 2;
+                        camera.y = ball.y - canvas.height / 2;
+                    }
+                    if (row[c] === '4') {
+                        stars.push({ x: x + GRID / 2, y: y + GRID / 2, collected: false });
+                    }
                 }
-                if (row[c] === '4') star = { x: x + GRID / 2, y: y + GRID / 2 };
-                if (row[c] === '5') items.push({ x: x + GRID / 2, y: y + GRID / 2, active: true });
-            }
-        });
-        messageBox.style.display = 'none';
-    }
-
-    function closeMessage() {
-        currentStage++;
-        initStage(currentStage);
-    }
-
-    window.addEventListener('keydown', e => {
-        keys[e.code] = true;
-        if ((e.code === 'Space' || e.code === 'KeyW' || e.code === 'ArrowUp') && !isGameOver) {
-            if (ball.hasItem && ball.canDouble) {
-                ball.vy = JUMP_FORCE;
-                ball.canDouble = false;
-                ball.hasItem = false;
-                createEffect(ball.x, ball.y, '#00d2ff');
-                ghosts.push({ x: ball.x, y: ball.y, r: BALL_RADIUS, a: 1.0 });
-            }
+            });
+            updateStarUI();
+            messageBox.style.display = 'none';
         }
-    });
-    window.addEventListener('keyup', e => keys[e.code] = false);
 
-    function update() {
-        if (isGameOver) return;
+        function updateStarUI() {
+            const remaining = stars.filter(s => !s.collected).length;
+            starDisplay.innerText = `남은 별: ${remaining}`;
+        }
 
-        if (keys['ArrowLeft'] || keys['KeyA']) ball.vx = -MOVE_SPEED;
-        else if (keys['ArrowRight'] || keys['KeyD']) ball.vx = MOVE_SPEED;
-        else ball.vx = 0;
+        function showGameOver() {
+            if(gameState !== 'playing') return;
+            gameState = 'gameover';
+            messageBox.style.display = 'block';
+            messageBox.style.borderColor = 'var(--spike-color)';
+            msgTitle.innerText = "GAME OVER";
+            msgTitle.style.color = 'var(--spike-color)';
+            msgContent.innerText = "화면 밖으로 나갔거나 가시에 찔렸습니다.";
+            msgButton.innerText = "다시 도전하기";
+            msgButton.className = "btn-retry";
+        }
 
-        ball.vy += GRAVITY;
-        ball.x += ball.vx;
-        ball.y += ball.vy;
+        function showClear() {
+            if(gameState !== 'playing') return;
+            gameState = 'clear';
+            messageBox.style.display = 'block';
+            messageBox.style.borderColor = 'var(--block-color)';
+            msgTitle.innerText = "STAGE CLEAR!";
+            msgTitle.style.color = 'var(--star-color)';
+            msgContent.innerText = "모든 별을 모았습니다! 다음 단계로!";
+            msgButton.innerText = "다음 단계로";
+            msgButton.className = "btn-next";
+        }
 
-        let targetCamX = ball.x - canvas.width / 2;
-        let targetCamY = ball.y - canvas.height / 2;
-        camera.x += (targetCamX - camera.x) * 0.1;
-        camera.y += (targetCamY - camera.y) * 0.1;
-
-        if (ball.y > camera.y + canvas.height + 400) initStage(currentStage);
-
-        particles.forEach((p, i) => {
-            p.x += p.vx; p.y += p.vy; p.life -= 0.03;
-            if (p.life <= 0) particles.splice(i, 1);
-        });
-        ghosts.forEach((g, i) => {
-            g.a -= 0.05; g.r += 1;
-            if (g.a <= 0) ghosts.splice(i, 1);
-        });
-
-        blocks.forEach(b => {
-            if (ball.x + BALL_RADIUS > b.x && ball.x - BALL_RADIUS < b.x + b.w &&
-                ball.y + BALL_RADIUS > b.y && ball.y - BALL_RADIUS < b.y + b.h) {
-                
-                let oT = (ball.y + BALL_RADIUS) - b.y;
-                let oB = (b.y + b.h) - (ball.y - BALL_RADIUS);
-                let oL = (ball.x + BALL_RADIUS) - b.x;
-                let oR = (b.x + b.w) - (ball.x - BALL_RADIUS);
-                let min = Math.min(oT, oB, oL, oR);
-
-                if (min === oT && ball.vy > 0) {
-                    ball.y = b.y - BALL_RADIUS; ball.vy = JUMP_FORCE;
-                    createEffect(ball.x, ball.y + BALL_RADIUS, '#ffffff');
-                } else if (min === oB && ball.vy < 0) {
-                    ball.y = b.y + b.h + BALL_RADIUS; ball.vy = 0;
-                } else if (min === oL) ball.x = b.x - BALL_RADIUS;
-                else if (min === oR) ball.x = b.x + b.w + BALL_RADIUS;
-            }
-        });
-
-        spikes.forEach(s => {
-            if (ball.x + BALL_RADIUS * 0.6 > s.x && ball.x - BALL_RADIUS * 0.6 < s.x + s.w &&
-                ball.y + BALL_RADIUS * 0.6 > s.y && ball.y - BALL_RADIUS * 0.6 < s.y + s.h) {
+        window.handleMessageClick = function() {
+            if (gameState === 'clear') {
+                currentStage++;
+                initStage(currentStage);
+            } else if (gameState === 'gameover') {
                 initStage(currentStage);
             }
-        });
+        };
 
-        items.forEach(it => {
-            if (it.active && Math.hypot(ball.x - it.x, ball.y - it.y) < BALL_RADIUS + 15) {
-                it.active = false;
-                ball.hasItem = true; ball.canDouble = true;
-                createEffect(it.x, it.y, '#9b59b6');
+        window.addEventListener('keydown', e => {
+            keys[e.code] = true;
+            if ((e.code === 'Space' || e.code === 'KeyW' || e.code === 'ArrowUp') && gameState === 'playing') {
+                const maxJumps = currentStage >= 2 ? 2 : 1;
+                if (ball.jumpCount < maxJumps) {
+                    ball.vy = JUMP_FORCE;
+                    ball.jumpCount++;
+                    if (ball.jumpCount === 2) {
+                        createEffect(ball.x, ball.y, '#00d2ff');
+                        ghosts.push({ x: ball.x, y: ball.y, r: BALL_RADIUS, a: 1.0 });
+                    }
+                }
             }
         });
+        window.addEventListener('keyup', e => keys[e.code] = false);
 
-        if (Math.hypot(ball.x - star.x, ball.y - star.y) < BALL_RADIUS + 15) {
-            isGameOver = true;
-            messageBox.style.display = 'block';
+        function update() {
+            if (gameState !== 'playing') return;
+
+            if (keys['ArrowLeft'] || keys['KeyA']) ball.vx = -MOVE_SPEED;
+            else if (keys['ArrowRight'] || keys['KeyD']) ball.vx = MOVE_SPEED;
+            else ball.vx = 0;
+
+            ball.vy += GRAVITY;
+            ball.x += ball.vx;
+            ball.y += ball.vy;
+
+            let targetCamX = ball.x - canvas.width / 2;
+            let targetCamY = ball.y - canvas.height / 2;
+            camera.x += (targetCamX - camera.x) * 0.1;
+            const fallLimit = lowestBlockY + 150;
+            if (ball.y < fallLimit) {
+                camera.y += (targetCamY - camera.y) * 0.1;
+            }
+
+            const padding = 20; 
+            if (
+                ball.x - BALL_RADIUS < camera.x - padding || 
+                ball.x + BALL_RADIUS > camera.x + canvas.width + padding || 
+                ball.y - BALL_RADIUS < camera.y - padding || 
+                ball.y + BALL_RADIUS > camera.y + canvas.height + padding 
+            ) {
+                showGameOver();
+            }
+
+            particles.forEach((p, i) => {
+                p.x += p.vx; p.y += p.vy; p.life -= 0.03;
+                if (p.life <= 0) particles.splice(i, 1);
+            });
+            ghosts.forEach((g, i) => {
+                g.a -= 0.05; g.r += 1;
+                if (g.a <= 0) ghosts.splice(i, 1);
+            });
+
+            blocks.forEach(b => {
+                if (ball.x + BALL_RADIUS > b.x && ball.x - BALL_RADIUS < b.x + b.w &&
+                    ball.y + BALL_RADIUS > b.y && ball.y - BALL_RADIUS < b.y + b.h) {
+                    let oT = (ball.y + BALL_RADIUS) - b.y;
+                    let oB = (b.y + b.h) - (ball.y - BALL_RADIUS);
+                    let oL = (ball.x + BALL_RADIUS) - b.x;
+                    let oR = (b.x + b.w) - (ball.x - BALL_RADIUS);
+                    let min = Math.min(oT, oB, oL, oR);
+                    if (min === oT && ball.vy > 0) {
+                        ball.y = b.y - BALL_RADIUS; ball.vy = JUMP_FORCE;
+                        ball.jumpCount = 1;
+                        createEffect(ball.x, ball.y + BALL_RADIUS, '#ffffff');
+                    } else if (min === oB && ball.vy < 0) {
+                        ball.y = b.y + b.h + BALL_RADIUS; ball.vy = 0;
+                    } else if (min === oL) ball.x = b.x - BALL_RADIUS;
+                    else if (min === oR) ball.x = b.x + b.w + BALL_RADIUS;
+                }
+            });
+
+            spikes.forEach(s => {
+                if (ball.x + BALL_RADIUS * 0.6 > s.x && ball.x - BALL_RADIUS * 0.6 < s.x + s.w &&
+                    ball.y + BALL_RADIUS * 0.6 > s.y && ball.y - BALL_RADIUS * 0.6 < s.y + s.h) {
+                    showGameOver();
+                }
+            });
+
+            stars.forEach(s => {
+                if (!s.collected && Math.hypot(ball.x - s.x, ball.y - s.y) < BALL_RADIUS + 15) {
+                    s.collected = true;
+                    createEffect(s.x, s.y, '#f9d342');
+                    updateStarUI();
+                    if (stars.every(st => st.collected)) {
+                        showClear();
+                    }
+                }
+            });
         }
-    }
 
-    function draw() {
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.save();
+            ctx.translate(-camera.x, -camera.y);
 
-        ctx.save();
-        ctx.translate(-camera.x, -camera.y);
-
-        ctx.strokeStyle = "rgba(255,255,255,0.05)";
-        ctx.beginPath();
-        for(let x = Math.floor(camera.x/GRID)*GRID; x < camera.x+canvas.width; x+=GRID) {
-            ctx.moveTo(x, camera.y); ctx.lineTo(x, camera.y+canvas.height);
-        }
-        for(let y = Math.floor(camera.y/GRID)*GRID; y < camera.y+canvas.height; y+=GRID) {
-            ctx.moveTo(camera.x, y); ctx.lineTo(camera.x+canvas.width, y);
-        }
-        ctx.stroke();
-
-        ctx.fillStyle = "#4ecca3";
-        blocks.forEach(b => {
+            ctx.strokeStyle = "rgba(255,255,255,0.05)";
             ctx.beginPath();
-            ctx.roundRect(b.x + 1, b.y + 1, b.w - 2, b.h - 2, 5);
-            ctx.fill();
-        });
+            for(let x = Math.floor(camera.x/GRID)*GRID; x < camera.x+canvas.width; x+=GRID) {
+                ctx.moveTo(x, camera.y); ctx.lineTo(x, camera.y+canvas.height);
+            }
+            for(let y = Math.floor(camera.y/GRID)*GRID; y < camera.y+canvas.height; y+=GRID) {
+                ctx.moveTo(camera.x, y); ctx.lineTo(camera.x+canvas.width, y);
+            }
+            ctx.stroke();
 
-        ctx.fillStyle = "#e94560";
-        spikes.forEach(s => {
-            ctx.beginPath();
-            ctx.moveTo(s.x + 6, s.y + s.h);
-            ctx.lineTo(s.x + s.w / 2, s.y + 10);
-            ctx.lineTo(s.x + s.w - 6, s.y + s.h);
-            ctx.fill();
-        });
+            ctx.fillStyle = "#4ecca3";
+            blocks.forEach(b => {
+                ctx.beginPath(); ctx.roundRect(b.x + 1, b.y + 1, b.w - 2, b.h - 2, 5); ctx.fill();
+            });
 
-        items.forEach(it => {
-            if (it.active) {
-                ctx.fillStyle = "#00d2ff";
+            ctx.fillStyle = "#e94560";
+            spikes.forEach(s => {
                 ctx.beginPath();
-                ctx.arc(it.x, it.y + Math.sin(Date.now()/200)*3, 10, 0, Math.PI*2);
+                ctx.moveTo(s.x + 6, s.y + s.h); ctx.lineTo(s.x + s.w / 2, s.y + 10); ctx.lineTo(s.x + s.w - 6, s.y + s.h);
                 ctx.fill();
-                ctx.shadowBlur = 10; ctx.shadowColor = "#00d2ff";
-                ctx.stroke(); ctx.shadowBlur = 0;
+            });
+
+            ghosts.forEach(g => {
+                ctx.strokeStyle = `rgba(0, 210, 255, ${g.a})`;
+                ctx.beginPath(); ctx.arc(g.x, g.y, g.r, 0, Math.PI*2); ctx.stroke();
+            });
+
+            particles.forEach(p => {
+                ctx.globalAlpha = p.life; ctx.fillStyle = p.color;
+                ctx.beginPath(); ctx.arc(p.x, p.y, 2, 0, Math.PI*2); ctx.fill();
+            });
+            ctx.globalAlpha = 1.0;
+
+            ctx.font = "bold 34px Arial"; ctx.textAlign = "center";
+            stars.forEach(s => {
+                if (!s.collected) {
+                    ctx.fillStyle = "#f9d342"; ctx.shadowBlur = 15; ctx.shadowColor = "#f9d342";
+                    ctx.fillText("★", s.x, s.y + 12); ctx.shadowBlur = 0;
+                }
+            });
+
+            ctx.fillStyle = "#ffeb3b";
+            if (currentStage >= 2 && ball.jumpCount < 2) {
+                ctx.shadowBlur = 15; ctx.shadowColor = "#00d2ff";
             }
-        });
+            ctx.beginPath(); ctx.arc(ball.x, ball.y, BALL_RADIUS, 0, Math.PI*2); ctx.fill();
+            ctx.shadowBlur = 0;
 
-        ghosts.forEach(g => {
-            ctx.strokeStyle = `rgba(0, 210, 255, ${g.a})`;
-            ctx.beginPath(); ctx.arc(g.x, g.y, g.r, 0, Math.PI*2); ctx.stroke();
-        });
+            ctx.restore();
+            update();
+            requestAnimationFrame(draw);
+        }
 
-        particles.forEach(p => {
-            ctx.globalAlpha = p.life;
-            ctx.fillStyle = p.color;
-            ctx.beginPath(); ctx.arc(p.x, p.y, 2, 0, Math.PI*2); ctx.fill();
-        });
-        ctx.globalAlpha = 1.0;
-
-        ctx.fillStyle = "#f9d342";
-        ctx.font = "bold 34px Arial";
-        ctx.textAlign = "center";
-        ctx.shadowBlur = 15; ctx.shadowColor = "#f9d342";
-        ctx.fillText("★", star.x, star.y + 12);
-        ctx.shadowBlur = 0;
-
-        ctx.fillStyle = ball.hasItem ? "#00d2ff" : "#ffeb3b";
-        ctx.shadowBlur = 10;
-        ctx.shadowColor = ball.hasItem ? "#00d2ff" : "rgba(255, 235, 59, 0.4)";
-        ctx.beginPath(); ctx.arc(ball.x, ball.y, BALL_RADIUS, 0, Math.PI*2); ctx.fill();
-        ctx.shadowBlur = 0;
-
-        ctx.restore();
-
-        update();
-        requestAnimationFrame(draw);
-    }
-
-    initStage(0);
-    draw();
+        initStage(0);
+        draw();
+    };
 </script>
 </body>
 </html>
